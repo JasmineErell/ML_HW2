@@ -1,5 +1,7 @@
+from collections import deque
+
 import numpy as np
-import pandas as df
+import pandas as pd
 import matplotlib.pyplot as plt
 
 ### Chi square table values ###
@@ -150,7 +152,9 @@ class DecisionNode:
         ###########################################################################
         # TODO: Implement the function.                                           #
         ###########################################################################
-        pass
+        labels = self.data[:, -1]
+        values, counts = np.unique(labels, return_counts=True)
+        pred = values[np.argmax(counts)]
         ###########################################################################
         #                             END OF YOUR CODE                            #
         ###########################################################################
@@ -165,7 +169,8 @@ class DecisionNode:
         ###########################################################################
         # TODO: Implement the function.                                           #
         ###########################################################################
-        pass
+        self.children.append(node)
+        self.children_values.append(val)
         ###########################################################################
         #                             END OF YOUR CODE                            #
         ###########################################################################
@@ -187,7 +192,16 @@ class DecisionNode:
         ###########################################################################
         # TODO: Implement the function.                                           #
         ###########################################################################
-        pass
+        phi_s = self.impurity_func(self.data)
+        values = list(np.unique(self.data[:, feature]))
+
+        total_rows = len(self.data)
+        summ_of_impurities = 0.0
+        for val in values:
+            groups[val] = self.data[self.data[:, feature] == val]
+            impurity = (groups[val].shape[0] / total_rows) * self.impurity_func(groups[val])
+            summ_of_impurities += impurity
+        goodness = phi_s - summ_of_impurities
         ###########################################################################
         #                             END OF YOUR CODE                            #
         ###########################################################################
@@ -206,7 +220,9 @@ class DecisionNode:
         ###########################################################################
         # TODO: Implement the function.                                           #
         ###########################################################################
-        pass
+        total_rows = len(self.data)
+        goodness, _ = self.goodness_of_split(self.feature)
+        self.feature_importance = (total_rows / n_total_sample) * goodness
         ###########################################################################
         #                             END OF YOUR CODE                            #
         ###########################################################################
@@ -222,7 +238,39 @@ class DecisionNode:
         ###########################################################################
         # TODO: Implement the function.                                           #
         ###########################################################################
-        pass
+
+        # Find the maximal feature according to the goodness of split
+        max_goodness = -float('inf')
+        max_feature = None
+        best_groups = None
+
+        n_features = self.data.shape[1] - 1  # Do not include the last column, which are the labels
+
+        for feature in range(n_features):
+            goodness, groups = self.goodness_of_split(feature)
+            if goodness > max_goodness:
+                max_goodness = goodness
+                max_feature = feature
+                best_groups = groups
+
+        if max_goodness <= 0 or self.depth >= self.max_depth:
+            self.terminal = True
+            return
+
+        self.feature = max_feature
+
+        # Create the nodes for each child (value) of the maximal feature
+        for val, subset in best_groups.items():
+            child_node = DecisionNode(
+                subset, self.impurity_func, depth=self.depth + 1,
+                chi=self.chi, max_depth=self.max_depth, gain_ratio=self.gain_ratio
+            )
+            self.add_child(child_node, val)
+
+        # If no children, it's a leaf
+        if len(self.children) == 0:
+            self.terminal = True
+
         ###########################################################################
         #                             END OF YOUR CODE                            #
         ###########################################################################
@@ -252,7 +300,14 @@ class DecisionTree:
         ###########################################################################
         # TODO: Implement the function.                                           #
         ###########################################################################
-        pass
+        self.root = DecisionNode(self.data, impurity_func=self.impurity_func)
+        queue = deque([self.root]) # initialize queue with root node
+
+        while len(queue) > 0:
+            node = queue.popleft()
+            node.split()
+            for child in node.children:
+                queue.append(child)
         ###########################################################################
         #                             END OF YOUR CODE                            #
         ###########################################################################
@@ -262,7 +317,7 @@ class DecisionTree:
         Predict a given instance
      
         Input:
-        - instance: an row vector from the dataset. Note that the last element 
+        - instance: a row vector from the dataset. Note that the last element
                     of this vector is the label of the instance.
      
         Output: the prediction of the instance.
@@ -271,7 +326,17 @@ class DecisionTree:
         ###########################################################################
         # TODO: Implement the function.                                           #
         ###########################################################################
-        pass
+        node = self.root
+        while not node.terminal:
+            value = instance[node.feature]
+            found = False
+            for i in range(len(node.children_values)):
+                if node.children_values[i] == value:
+                    node = node.children[i]
+                    found = True
+                    break
+            if not found:
+                break  # unknown value — stop early
         ###########################################################################
         #                             END OF YOUR CODE                            #
         ###########################################################################
@@ -290,7 +355,12 @@ class DecisionTree:
         ###########################################################################
         # TODO: Implement the function.                                           #
         ###########################################################################
-        pass
+        for row in dataset:
+            prediction = self.predict(row)
+            if prediction == row[-1]:
+                accuracy += 1
+        accuracy /= len(dataset)
+        accuracy *= 100
         ###########################################################################
         #                             END OF YOUR CODE                            #
         ###########################################################################
@@ -316,7 +386,14 @@ def depth_pruning(X_train, X_validation):
         ###########################################################################
         # TODO: Implement the function.                                           #
         ###########################################################################
-        pass
+        tree = DecisionTree(
+            X_train,
+            impurity_func=get_best_impurity(X_train, X_validation),
+            max_depth=max_depth,
+        )
+        tree.build_tree()
+        training.append(tree.calc_accuracy(X_train))
+        validation.append(tree.calc_accuracy(X_validation))
         ###########################################################################
         #                             END OF YOUR CODE                            #
         ###########################################################################
@@ -371,6 +448,28 @@ def count_nodes(node):
     #                             END OF YOUR CODE                            #
     ###########################################################################
     return n_nodes
+
+
+def get_best_impurity(X_train, X_validation):
+    gini_tree = DecisionTree(
+        X_train,
+        impurity_func=calc_gini,
+    )
+    entropy_tree = DecisionTree(
+        X_train,
+        impurity_func=calc_entropy,
+    )
+
+    gini_tree.build_tree()
+    entropy_tree.build_tree()
+
+    gini_acc = gini_tree.calc_accuracy(X_validation)
+    entropy_acc = entropy_tree.calc_accuracy(X_validation)
+
+    if gini_acc > entropy_acc:
+        return gini_acc
+    else:
+        return entropy_acc
 
 
 
