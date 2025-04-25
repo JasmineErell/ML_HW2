@@ -277,7 +277,7 @@ class DecisionNode:
 
                     
 class DecisionTree:
-    def __init__(self, data, impurity_func, feature=-1, chi=1, max_depth=1000, gain_ratio=False):
+    def __init__(self, data, impurity_func, feature=-1, chi=1, max_depth=6, gain_ratio=False):
         self.data = data # the training data used to construct the tree
         self.root = None # the root node of the tree
         self.max_depth = max_depth # the maximum allowed depth of the tree
@@ -300,14 +300,29 @@ class DecisionTree:
         ###########################################################################
         # TODO: Implement the function.                                           #
         ###########################################################################
-        self.root = DecisionNode(self.data, impurity_func=self.impurity_func)
+        self.root = DecisionNode(
+            self.data,
+            impurity_func=self.impurity_func,
+            max_depth=self.max_depth,
+            chi=self.chi,
+            gain_ratio=self.gain_ratio
+        )
         queue = deque([self.root]) # initialize queue with root node
+        import time
+
+        count = 0
+        start = time.time()
 
         while len(queue) > 0:
             node = queue.popleft()
             node.split()
             for child in node.children:
                 queue.append(child)
+            count += 1
+
+            if count % 500 == 0:
+                elapsed = time.time() - start
+                print(f"Processed {count} nodes in {elapsed:.1f}s; queue size = {len(queue)}")
         ###########################################################################
         #                             END OF YOUR CODE                            #
         ###########################################################################
@@ -382,15 +397,24 @@ def depth_pruning(X_train, X_validation):
     training = []
     validation  = []
     root = None
+    best_impurity = get_best_impurity(X_train, X_validation)
+
     for max_depth in [1, 2, 3, 4, 5, 6, 7, 8, 9, 10]:
         ###########################################################################
         # TODO: Implement the function.                                           #
         ###########################################################################
-        tree = DecisionTree(
-            X_train,
-            impurity_func=get_best_impurity(X_train, X_validation),
-            max_depth=max_depth,
-        )
+        if best_impurity == 'gini':
+            tree = DecisionTree(
+                X_train,
+                impurity_func=calc_gini,
+                max_depth=max_depth,
+            )
+        else:
+            tree = DecisionTree(
+                X_train,
+                impurity_func=calc_entropy,
+                max_depth=max_depth,
+            )
         tree.build_tree()
         training.append(tree.calc_accuracy(X_train))
         validation.append(tree.calc_accuracy(X_validation))
@@ -466,10 +490,11 @@ def get_best_impurity(X_train, X_validation):
     gini_acc = gini_tree.calc_accuracy(X_validation)
     entropy_acc = entropy_tree.calc_accuracy(X_validation)
 
+
     if gini_acc > entropy_acc:
-        return gini_acc
+        return 'gini'
     else:
-        return entropy_acc
+        return 'entropy'
 
 
 
