@@ -202,6 +202,19 @@ class DecisionNode:
             impurity = (groups[val].shape[0] / total_rows) * self.impurity_func(groups[val])
             summ_of_impurities += impurity
         goodness = phi_s - summ_of_impurities
+
+        # Compute split info for gain ratio
+        if self.gain_ratio:
+            split_info = 0.0
+            for subset in groups.values():
+                p = len(subset) / total_rows
+                if p > 0:
+                    split_info -= p * np.log2(p)
+            if split_info > 0:
+                gain_ratio = goodness / split_info
+            else:
+                gain_ratio = 0.0
+            return gain_ratio, groups
         ###########################################################################
         #                             END OF YOUR CODE                            #
         ###########################################################################
@@ -242,7 +255,7 @@ class DecisionNode:
         # Find the maximal feature according to the goodness of split
         max_goodness = -float('inf')
         max_feature = None
-        best_groups = None
+        max_feature_subset = None
 
         n_features = self.data.shape[1] - 1  # Do not include the last column, which are the labels
 
@@ -251,16 +264,25 @@ class DecisionNode:
             if goodness > max_goodness:
                 max_goodness = goodness
                 max_feature = feature
-                best_groups = groups
+                max_feature_subset = groups
 
         if max_goodness <= 0 or self.depth >= self.max_depth:
             self.terminal = True
             return
 
+        if self.chi < 1.0:  # Only prune if chi pruning is active
+            chi_square = self.compute_chi_square(max_feature_subset)
+            degrees_of_freedom = len(max_feature_subset) - 1
+            chi_threshold = chi_table[degrees_of_freedom][self.chi]
+
+            if chi_square < chi_threshold:
+                self.terminal = True
+                return
+
         self.feature = max_feature
 
         # Create the nodes for each child (value) of the maximal feature
-        for val, subset in best_groups.items():
+        for val, subset in max_feature_subset.items():
             child_node = DecisionNode(
                 subset, self.impurity_func, depth=self.depth + 1,
                 chi=self.chi, max_depth=self.max_depth, gain_ratio=self.gain_ratio
@@ -271,13 +293,43 @@ class DecisionNode:
         if len(self.children) == 0:
             self.terminal = True
 
+    def compute_chi_square(self, groups):
+        """
+        Computes the chi-squared statistic between parent and children groups.
+
+        Input:
+        - groups: dict mapping feature value -> subset of the data
+
+        Output:
+        - chi-square statistic (float)
+        """
+
+        # Parent label distribution
+        labels = self.data[:, -1]
+        parent_counts = pd.Series(labels).value_counts().to_dict()
+        total_parent = len(labels)
+
+        chi_square = 0.0
+
+        for subset in groups.values():
+            subset_labels = subset[:, -1]
+            subset_counts = pd.Series(subset_labels).value_counts().to_dict()
+            total_subset = len(subset_labels)
+
+            for label in parent_counts:
+                expected = (parent_counts[label] / total_parent) * total_subset
+                observed = subset_counts.get(label, 0)
+                if expected > 0:
+                    chi_square += (observed - expected) ** 2 / expected
+
+        return chi_square
         ###########################################################################
         #                             END OF YOUR CODE                            #
         ###########################################################################
 
                     
 class DecisionTree:
-    def __init__(self, data, impurity_func, feature=-1, chi=1, max_depth=6, gain_ratio=False):
+    def __init__(self, data, impurity_func, feature=-1, chi=1, max_depth=1000, gain_ratio=False):
         self.data = data # the training data used to construct the tree
         self.root = None # the root node of the tree
         self.max_depth = max_depth # the maximum allowed depth of the tree
@@ -409,12 +461,27 @@ def depth_pruning(X_train, X_validation):
                 impurity_func=calc_gini,
                 max_depth=max_depth,
             )
-        else:
+        elif best_impurity == 'entropy':
             tree = DecisionTree(
                 X_train,
                 impurity_func=calc_entropy,
                 max_depth=max_depth,
             )
+        elif best_impurity == 'gini_gain':
+            tree = DecisionTree(
+                X_train,
+                impurity_func=calc_gini,
+                max_depth=max_depth,
+                gain_ratio=True,
+            )
+        else:
+            tree = DecisionTree(
+                X_train,
+                impurity_func=calc_entropy,
+                max_depth=max_depth,
+                gain_ratio=True,
+            )
+
         tree.build_tree()
         training.append(tree.calc_accuracy(X_train))
         validation.append(tree.calc_accuracy(X_validation))
@@ -447,7 +514,40 @@ def chi_pruning(X_train, X_test):
     ###########################################################################
     # TODO: Implement the function.                                           #
     ###########################################################################
-    pass
+    # decide which impurity to use
+    best_impurity = get_best_impurity(X_train, X_test)
+    if best_impurity.startswith('gini'):
+        impurity = calc_gini
+    else:
+        impurity = calc_entropy
+    use_gain = best_impurity.endswith('_gain')
+
+    # iterate over the standard p-value cutoffs in your chi_table
+    p_values = sorted(chi_table[1].keys())  # [0.0001, 0.05, 0.1, 0.25, 0.5]
+    for p in p_values:
+        # build tree with this chi cutoff
+        tree = DecisionTree(
+            X_train,
+            impurity_func=impurity,
+            chi=p,
+            max_depth=1000,  # effectively unbounded; pruning comes from chi
+            gain_ratio = use_gain
+        )
+        tree.build_tree()
+
+        # record accuracies
+        chi_training_acc.append(tree.calc_accuracy(X_train))
+        chi_validation_acc.append(tree.calc_accuracy(X_test))
+
+        # compute maximal depth of the built tree
+        max_d = 0
+        queue = deque([tree.root])
+        while queue:
+            node = queue.popleft()
+            max_d = max(max_d, node.depth)
+            for c in node.children:
+                queue.append(c)
+        depth.append(max_d)
     ###########################################################################
     #                             END OF YOUR CODE                            #
     ###########################################################################
@@ -467,7 +567,13 @@ def count_nodes(node):
     ###########################################################################
     # TODO: Implement the function.                                           #
     ###########################################################################
-    pass
+    n_nodes = 0
+    queue = deque([node])
+    while queue:
+        node = queue.popleft()
+        n_nodes += 1
+        for c in node.children:
+            queue.append(c)
     ###########################################################################
     #                             END OF YOUR CODE                            #
     ###########################################################################
@@ -479,23 +585,41 @@ def get_best_impurity(X_train, X_validation):
         X_train,
         impurity_func=calc_gini,
     )
+
     entropy_tree = DecisionTree(
         X_train,
         impurity_func=calc_entropy,
     )
 
+    gini_tree_gain = DecisionTree(
+        X_train,
+        impurity_func=calc_gini,
+        gain_ratio=True,
+    )
+
+    entropy_tree_gain = DecisionTree(
+        X_train,
+        impurity_func=calc_entropy,
+        gain_ratio=True,
+    )
+
     gini_tree.build_tree()
     entropy_tree.build_tree()
+    gini_tree_gain.build_tree()
+    entropy_tree_gain.build_tree()
 
     gini_acc = gini_tree.calc_accuracy(X_validation)
     entropy_acc = entropy_tree.calc_accuracy(X_validation)
+    gini_acc_gain = gini_tree_gain.calc_accuracy(X_validation)
+    entropy_acc_gain = entropy_tree_gain.calc_accuracy(X_validation)
 
+    func2acc = {}
+    func2acc['gini'] = gini_acc
+    func2acc['entropy'] = entropy_acc
+    func2acc['gini_gain'] = gini_acc_gain
+    func2acc['entropy_gain'] = entropy_acc_gain
 
-    if gini_acc > entropy_acc:
-        return 'gini'
-    else:
-        return 'entropy'
-
+    return max(func2acc, key=func2acc.get)
 
 
 
