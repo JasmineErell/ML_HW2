@@ -271,8 +271,9 @@ class DecisionNode:
             return
 
         if self.chi < 1.0:  # Only prune if chi pruning is active
+            n_classes = len(np.unique(self.data[:, -1]))
+            degrees_of_freedom = (len(max_feature_subset) - 1) * (n_classes - 1)
             chi_square = self.compute_chi_square(max_feature_subset)
-            degrees_of_freedom = len(max_feature_subset) - 1
             chi_threshold = chi_table[degrees_of_freedom][self.chi]
 
             if chi_square < chi_threshold:
@@ -303,6 +304,9 @@ class DecisionNode:
         Output:
         - chi-square statistic (float)
         """
+
+        n_classes = len(np.unique(self.data[:, -1]))
+        df = (len(groups) - 1) * (n_classes - 1)
 
         # Parent label distribution
         labels = self.data[:, -1]
